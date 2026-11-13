@@ -1,0 +1,78 @@
+install.packages("bibliometrix")
+library(bibliometrix)
+
+# 1. Instalar librerías (solo si no las tienes instaladas; quita el '#' para ejecutar)
+install.packages(c("readxl", "dplyr", "ggplot2"))
+
+# 2. Cargar librerías
+library(readxl)
+library(dplyr)
+library(ggplot2)
+
+# 3. Importar tu archivo Excel (.xlsx)
+# Asegúrate de que el archivo esté en tu carpeta de trabajo (puedes verificarla con getwd())
+datos <- read_excel("Data Extraction (ThinkNeuro) (1).xlsx")
+
+ 
+
+# 4. Procesar los autores sénior con múltiples artículos en el Top 100
+senior_authors <- datos %>%
+  mutate(
+    `Senior Author` = trimws(as.character(`Senior Author`)),
+    `WoS Core` = as.numeric(`WoS Core`)
+  ) %>%
+  group_by(`Senior Author`) %>%
+  summarise(
+    Articulos = n(),
+    Citas_Totales = sum(`WoS Core`, na.rm = TRUE)
+  ) %>%
+  filter(Articulos > 1) %>%
+  arrange(desc(Articulos), desc(Citas_Totales))
+
+# 5. Mostrar la tabla de resultados en la consola de R
+print(senior_authors)
+
+# 6. Crear el gráfico
+grafico_senior <- ggplot(senior_authors, aes(x = reorder(`Senior Author`, Articulos), y = Articulos)) +
+  geom_col(fill = "#1f4e78", width = 0.7) +
+  geom_text(
+    aes(label = paste0(Articulos, " (", Citas_Totales, " citations)")), 
+    hjust = -0.1, 
+    size = 3.5, 
+    color = "black"
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.30)), 
+    breaks = seq(0, max(senior_authors$Articulos), by = 2)
+  ) +
+  labs(
+    title = "Senior Authors with Multiple Papers in the Top 100 Most Cited",
+    subtitle = "Based on WoS Core citation counts",
+    x = "Senior Author",
+    y = "Number of Papers in Top 100"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 13),
+    axis.text.y = element_text(face = "bold", color = "black")
+  )
+
+# 7. Visualizar el gráfico en RStudio
+print(grafico_senior)
+
+# 8. Guardar el gráfico en alta calidad (300 dpi)
+ggsave(
+  filename = "Senior_Authors_Top100.png", 
+  plot = grafico_senior, 
+  width = 9, 
+  height = 6, 
+  dpi = 300,
+  bg = "white"
+)
+
+
+
+# Note: Ignore the checkpoints. Run the code as per usual. The image is going to save by itself, do not export it from the Plot section. 
