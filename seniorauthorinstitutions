@@ -1,0 +1,143 @@
+install.packages("bibliometrix")
+library(bibliometrix)
+
+# 1. Instalar librerías si no las tienes (quita el '#' para instalar)
+install.packages(c("readxl", "writexl", "dplyr", "stringr", "tidyr", "ggplot2"))
+
+# 2. Cargar librerías
+library(readxl)
+library(writexl)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(ggplot2)
+
+# 3. Cargar ambos archivos Excel
+wos_excel <- read_excel("savedrecs.xlsx")
+mi_excel  <- read_excel("Data Extraction (ThinkNeuro) (1).xlsx")
+
+# Identificar automáticamente los nombres de columnas en savedrecs.xlsx
+col_autores <- intersect(names(wos_excel), c("Authors", "AU"))[1]
+col_titulo  <- intersect(names(wos_excel), c("Article Title", "TI"))[1]
+col_dir     <- intersect(names(wos_excel), c("Addresses", "C1"))[1]
+
+# 4. Función para extraer Institución y País del ÚLTIMO autor desde la columna de direcciones
+extraer_datos_senior <- function(au_string, c1_string) {
+  if (is.na(au_string) || is.na(c1_string) || c1_string == "") {
+    return(tibble(Senior_Institution = NA_character_, Senior_Country = NA_character_))
+  }
+  
+  # Obtener el apellido del último autor
+  autores <- str_trim(unlist(str_split(au_string, ";")))
+  ultimo_autor <- tail(autores, 1)
+  # Extraer apellido (antes de la coma si es formato "Apellido, Nombre", o primera palabra)
+  apellido_senior <- str_trim(unlist(str_split(ultimo_autor, ",| "))[1])
+  
+  # Dividir las afiliaciones por bloques '['
+  bloques <- unlist(str_split(c1_string, "\\["))
+  bloques <- bloques[bloques != ""]
+  
+  # Buscar el bloque que pertenece al autor sénior
+  bloque_senior <- bloques[str_detect(toupper(bloques), toupper(apellido_senior))]
+  
+  if (length(bloque_senior) > 0) {
+    texto_afiliacion <- tail(bloque_senior, 1)
+    partes_corchete <- unlist(str_split(texto_afiliacion, "\\]"))
+    solo_direccion <- if (length(partes_corchete) > 1) str_trim(partes_corchete[2]) else str_trim(partes_corchete[1])
+  } else {
+    # Si el registro antiguo no usa corchetes, tomar la última dirección listada
+    lista_inst <- unlist(str_split(c1_string, ";"))
+    solo_direccion <- str_trim(tail(lista_inst, 1))
+  }
+  
+  # Dividir la dirección por comas: el primer elemento es la institución y el último es el país
+  partes_dir <- str_trim(unlist(str_split(solo_direccion, ",")))
+  institucion <- partes_dir[1]
+  pais <- tail(partes_dir, 1)
+  
+  return(tibble(Senior_Institution = institucion, Senior_Country = pais))
+}
+
+# 5. Extraer instituciones y países desde savedrecs.xlsx
+wos_extraido <- wos_excel %>%
+  rename(
+    AU_temp = all_of(col_autores),
+    TI_temp = all_of(col_titulo),
+    C1_temp = all_of(col_dir)
+  ) %>%
+  rowwise() %>%
+  mutate(datos_senior = list(extraer_datos_senior(AU_temp, C1_temp))) %>%
+  unnest(datos_senior) %>%
+  ungroup() %>%
+  mutate(
+    TI_clean = str_remove_all(toupper(trimws(TI_temp)), "[[:punct:]]")
+  ) %>%
+  select(TI_clean, Senior_Institution, Senior_Country, Addresses_Raw = C1_temp) %>%
+  distinct(TI_clean, .keep_all = TRUE)
+
+# 6. Cruzar los datos con tu Excel principal usando el título del artículo
+excel_actualizado <- mi_excel %>%
+  mutate(TI_clean = str_remove_all(toupper(trimws(`Article title`)), "[[:punct:]]")) %>%
+  left_join(wos_extraido, by = "TI_clean") %>%
+  select(-TI_clean)
+
+# Guardar el nuevo Excel enriquecido
+write_xlsx(excel_actualizado, "Data Extraction (ThinkNeuro)_Con_Instituciones.xlsx")
+
+# 7. Analizar y graficar Instituciones de Autores Sénior con múltiples artículos
+senior_institutions <- excel_actualizado %>%
+  mutate(`WoS Core` = as.numeric(`WoS Core`)) %>%
+  filter(!is.na(Senior_Institution) & Senior_Institution != "") %>%
+  group_by(Senior_Institution) %>%
+  summarise(
+    Articulos = n(),
+    Citas_Totales = sum(`WoS Core`, na.rm = TRUE)
+  ) %>%
+  filter(Articulos > 1) %>%
+  arrange(desc(Articulos), desc(Citas_Totales))
+
+# Ver tabla de resultados en consola
+print(senior_institutions)
+
+# 8. Generar el gráfico
+grafico_instituciones <- ggplot(senior_institutions, aes(x = reorder(Senior_Institution, Articulos), y = Articulos)) +
+  geom_col(fill = "#2e6b62", width = 0.7) +
+  geom_text(
+    aes(label = paste0(Articulos, " (", Citas_Totales, " citations)")), 
+    hjust = -0.1, 
+    size = 3.5, 
+    color = "black"
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.32)), 
+    breaks = seq(0, max(senior_institutions$Articulos), by = 2)
+  ) +
+  labs(
+    title = "Senior Author Institutions with Multiple Papers in the Top 100",
+    subtitle = "Based on WoS Core citation counts",
+    x = "Institution",
+    y = "Number of Papers in Top 100"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 13),
+    axis.text.y = element_text(face = "bold", color = "black", size = 10)
+  )
+
+# Visualizar y guardar en alta resolución (300 dpi)
+print(grafico_instituciones)
+
+ggsave(
+  filename = "Senior_Author_Institutions_Top100.png", 
+  plot = grafico_instituciones, 
+  width = 11, 
+  height = 6.5, 
+  dpi = 300,
+  bg = "white"
+)
+
+# Note: Ignore the checkpoints and run the code as per usual. The image is going to save by itself, do not export it from the Plot section of your work environment. You will need the 2 Excel spreadsheets I will put on the Drive.
+
