@@ -1,0 +1,83 @@
+install.packages("bibliometrix")
+library(bibliometrix)
+
+# 1. Instalar librerías si no las tienes (quita el '#' para instalar)
+install.packages(c("readxl", "writexl", "dplyr", "stringr", "tidyr", "ggplot2"))
+
+# 1. Cargar librerías necesarias
+library(readxl)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+
+# 2. Cargar tu archivo Excel (.xlsx)
+datos <- read_excel("Data Extraction (ThinkNeuro) (1).xlsx")
+
+# 3. Procesar las revistas con múltiples artículos en el Top 100
+top_journals <- datos %>%
+  mutate(
+    # Limpiar espacios extra y estandarizar a mayúsculas para evitar duplicados
+    `Journal Title` = str_to_upper(trimws(as.character(`Journal Title`))),
+    `WoS Core` = as.numeric(`WoS Core`)
+  ) %>%
+  # Eliminar filas sin nombre de revista
+  filter(!is.na(`Journal Title`) & `Journal Title` != "") %>%
+  # Agrupar por revista
+  group_by(`Journal Title`) %>%
+  summarise(
+    Articulos = n(),
+    Citas_Totales = sum(`WoS Core`, na.rm = TRUE),
+    Promedio_Citas = round(mean(`WoS Core`, na.rm = TRUE), 1)
+  ) %>%
+  # Filtrar solo revistas con más de 1 artículo en el Top 100
+  filter(Articulos > 1) %>%
+  # Ordenar de mayor a menor por cantidad de artículos y luego por citas totales
+  arrange(desc(Articulos), desc(Citas_Totales))
+
+# 4. Mostrar la tabla completa en la consola de R
+print(top_journals, n = Inf)
+
+# 5. Generar el gráfico (con ajuste de texto automático para nombres largos de revistas)
+grafico_revistas <- ggplot(top_journals, aes(x = reorder(`Journal Title`, Articulos), y = Articulos)) +
+  geom_col(fill = "#3b5998", width = 0.7) +
+  geom_text(
+    aes(label = paste0(Articulos, " (", Citas_Totales, " citations)")), 
+    hjust = -0.1, 
+    size = 3.5, 
+    color = "black"
+  ) +
+  coord_flip() +
+  # Dividir nombres muy largos de revistas (ej. PNAS) en dos líneas para que no aplasten el gráfico
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 42)) +
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.30)), 
+    breaks = seq(0, max(top_journals$Articulos), by = 2)
+  ) +
+  labs(
+    title = "Journals with Multiple Papers in the Top 100 Most Cited",
+    subtitle = "Based on WoS Core citation counts",
+    x = "Journal Title",
+    y = "Number of Papers in Top 100"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 13),
+    axis.text.y = element_text(face = "bold", color = "black", size = 9.5)
+  )
+
+# 6. Visualizar el gráfico en RStudio
+print(grafico_revistas)
+
+# 7. Guardar el gráfico en alta calidad (300 dpi)
+ggsave(
+  filename = "Top_Journals_Top100.png", 
+  plot = grafico_revistas, 
+  width = 11, 
+  height = 7.5, 
+  dpi = 300,
+  bg = "white"
+)
+
+# Note: Ignore the checkpoints and run the code as per usual. The image is going to save by itself, do not export it from the Plot section of your work environment. You will need the 2 Excel spreadsheets I will put on the Drive.
