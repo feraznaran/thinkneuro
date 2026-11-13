@@ -6,108 +6,129 @@ install.packages(c("readxl", "writexl", "dplyr", "stringr", "tidyr", "ggplot2"))
 
 # 1. Cargar librerías
 library(readxl)
-library(writexl)
 library(dplyr)
 library(stringr)
 library(ggplot2)
 
-# 2. Cargar tus dos archivos (.xlsx)
+# 2. Cargar tus archivos Excel
 wos_excel <- read_excel("savedrecs.xlsx")
 mi_excel  <- read_excel("Data Extraction (ThinkNeuro) (1).xlsx")
 
-# Identificar columnas clave en savedrecs.xlsx
-col_titulo   <- intersect(names(wos_excel), c("Article Title", "TI"))[1]
-col_abstract <- intersect(names(wos_excel), c("Abstract", "AB"))[1]
-col_keywords <- intersect(names(wos_excel), c("Author Keywords", "DE"))[1]
-col_doctype  <- intersect(names(wos_excel), c("Document Type", "DT"))[1]
+# 3. Calcular automáticamente los conteos desde tus datos
+n_preliminar <- nrow(wos_excel)
 
-# 3. Clasificar la metodología de cada estudio leyendo Título, Abstract y Keywords
-wos_metodos <- wos_excel %>%
-  rename(
-    TI_temp = all_of(col_titulo),
-    AB_temp = all_of(col_abstract),
-    DE_temp = all_of(col_keywords),
-    DT_temp = all_of(col_doctype)
-  ) %>%
+# Asegurar los 100 estudios elegibles (ordenados por citas)
+top100 <- mi_excel %>%
+  mutate(`WoS Core` = as.numeric(`WoS Core`)) %>%
+  arrange(desc(`WoS Core`)) %>%
+  slice_head(n = 100)
+
+n_elegibles    <- nrow(top100)
+n_no_elegibles <- n_preliminar - n_elegibles
+
+# Cruzar con savedrecs.xlsx para contar cuántos son Articles y cuántos son Review
+col_titulo  <- intersect(names(wos_excel), c("Article Title", "TI"))[1]
+col_doctype <- intersect(names(wos_excel), c("Document Type", "DT"))[1]
+
+wos_tipos <- wos_excel %>%
   mutate(
-    # Unir todo el texto disponible del artículo en mayúsculas para buscar términos metodológicos
-    texto_completo = toupper(paste(TI_temp, AB_temp, DE_temp, sep = " ")),
-    TI_clean = str_remove_all(toupper(trimws(TI_temp)), "[[:punct:]]"),
-    
-    # Clasificación metodológica basada en palabras clave de neurociencia
-    Metodo_Principal = case_when(
-      str_detect(toupper(DT_temp), "REVIEW") ~ "Review / Theoretical",
-      str_detect(texto_completo, "FMRI|FUNCTIONAL MAGNETIC|NEUROIMAGING|PET |POSITRON EMISSION|EEG|MEG ") ~ "Human Neuroimaging (fMRI/PET/EEG)",
-      str_detect(texto_completo, "OPTOGENETIC|ELECTROPHYSIOL|SINGLE-UNIT|VOLTAMMETRY|MICRODIALYSIS|RODENT|RAT |RATS |MOUSE|MICE|MONKEY|PRIMATE|ANIMAL") ~ "Animal / Electrophysiology",
-      str_detect(texto_completo, "GENETIC|GENE|POLYMORPHISM|COMT|DRD2|DAT1|PARKINSON|PHARMACOL|L-DOPA|LEVODOPA|MEDICATION|PATIENT") ~ "Clinical / Genetics / Pharmacology",
-      str_detect(texto_completo, "COMPUTATIONAL|MODEL|SIMULATION|REINFORCEMENT LEARNING|TEMPORAL DIFFERENCE|ACTOR-CRITIC|BAYESIAN|NETWORK") ~ "Computational Modeling",
-      TRUE ~ "Behavioral / Other"
-    )
+    TI_clean = str_remove_all(toupper(trimws(.data[[col_titulo]])), "[[:punct:]]"),
+    Tipo = ifelse(str_detect(toupper(.data[[col_doctype]]), "REVIEW"), "Review", "Article")
   ) %>%
-  select(TI_clean, Document_Type = DT_temp, Metodo_Principal) %>%
+  select(TI_clean, Tipo) %>%
   distinct(TI_clean, .keep_all = TRUE)
 
-# 4. Cruzar los métodos con tu Excel del Top 100
-excel_con_metodos <- mi_excel %>%
+conteo_tipos <- top100 %>%
   mutate(TI_clean = str_remove_all(toupper(trimws(`Article title`)), "[[:punct:]]")) %>%
-  left_join(wos_metodos, by = "TI_clean") %>%
-  select(-TI_clean)
+  left_join(wos_tipos, by = "TI_clean") %>%
+  count(Tipo)
 
-# Guardar el Excel actualizado para revisión
-write_xlsx(excel_con_metodos, "Data Extraction (ThinkNeuro)_Con_Metodos.xlsx")
+n_articles <- conteo_tipos$n[conteo_tipos$Tipo == "Article"]
+n_reviews  <- conteo_tipos$n[conteo_tipos$Tipo == "Review"]
 
-# 5. Agrupar datos para la figura de Enfoques Metodológicos
-resumen_metodos <- excel_con_metodos %>%
-  mutate(`WoS Core` = as.numeric(`WoS Core`)) %>%
-  filter(!is.na(Metodo_Principal)) %>%
-  group_by(Metodo_Principal) %>%
-  summarise(
-    Articulos = n(),
-    Citas_Totales = sum(`WoS Core`, na.rm = TRUE)
-  ) %>%
-  arrange(desc(Articulos), desc(Citas_Totales))
+# Si algún valor queda vacío, asignar 0 para evitar errores
+if (length(n_articles) == 0) n_articles <- 0
+if (length(n_reviews) == 0)  n_reviews  <- 0
 
-# Ver tabla en consola
-print(resumen_metodos)
+# Imprimir resumen en consola para verificación
+cat("Preliminar:", n_preliminar, "| Elegibles:", n_elegibles, "| No elegibles:", n_no_elegibles, "\n")
+cat("Articles:", n_articles, "| Review:", n_reviews, "\n")
 
-# 6. Generar la figura de Métodos (Web of Science Method Figure)
-grafico_metodos <- ggplot(resumen_metodos, aes(x = reorder(Metodo_Principal, Articulos), y = Articulos)) +
-  geom_col(fill = "#4a6fe3", width = 0.65) +
+# 4. Definir las cajas (nodos) del diagrama con las proporciones de la imagen
+cajas <- data.frame(
+  xmin = c(1.5, 1.5, 1.5, 5.2, 1.5, 1.5),
+  xmax = c(8.5, 8.5, 4.8, 8.5, 4.0, 4.0),
+  ymin = c(8.6, 6.4, 3.8, 3.8, 2.3, 0.9),
+  ymax = c(9.8, 7.4, 5.2, 5.2, 3.2, 1.8),
+  texto = c(
+    "Web of Science Search",
+    paste0("Preliminary Search Results (n=", n_preliminar, ")"),
+    paste0("Eligible Study\n(n =", n_elegibles, ")"),
+    paste0("Non-eligible Study\n(n=", n_no_elegibles, ")"),
+    paste0("Articles = ", n_articles),
+    paste0("Review = ", n_reviews)
+  ),
+  tamano_letra = c(6.5, 4.8, 4.5, 4.5, 4.3, 4.3)
+)
+
+# 5. Definir las líneas conectoras y flechas
+lineas <- data.frame(
+  x    = c(5.0, 3.15, 3.15, 6.85, 4.4, 4.4, 4.4),
+  xend = c(5.0, 6.85, 3.15, 6.85, 4.4, 4.0, 4.0),
+  y    = c(6.4, 5.9,  5.9,  5.9,  3.8, 2.75, 1.35),
+  yend = c(5.9, 5.9,  5.2,  5.2,  1.35, 2.75, 1.35),
+  flecha = c(FALSE, FALSE, TRUE, TRUE, FALSE, TRUE, TRUE)
+)
+
+# 6. Dibujar el diagrama de flujo con ggplot2
+figura_flujo <- ggplot() +
+  # Cajas azul claro con borde negro
+  geom_rect(
+    data = cajas,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    fill = "#d9e2f3", color = "black", linewidth = 0.6
+  ) +
+  # Texto en negrita dentro de cada caja
   geom_text(
-    aes(label = paste0(Articulos, " (", Citas_Totales, " citations)")), 
-    hjust = -0.1, 
-    size = 3.5, 
-    color = "black"
+    data = cajas,
+    aes(x = (xmin + xmax) / 2, y = (ymin + ymax) / 2, label = texto, size = tamano_letra),
+    fontface = "bold", family = "serif", color = "black"
   ) +
-  coord_flip() +
-  scale_y_continuous(
-    expand = expansion(mult = c(0, 0.32)), 
-    breaks = seq(0, max(resumen_metodos$Articulos) + 5, by = 5)
+  scale_size_identity() +
+  # Flecha principal superior
+  geom_segment(
+    aes(x = 5.0, xend = 5.0, y = 8.6, yend = 7.4),
+    arrow = arrow(length = unit(0.22, "cm"), type = "closed"),
+    linewidth = 0.6, color = "black"
   ) +
-  labs(
-    title = "Methodological Approaches in the Top 100 Most Cited Papers",
-    subtitle = "Categorized from Web of Science metadata (Abstract, Keywords, and Document Type)",
-    x = "Study Design / Method",
-    y = "Number of Papers in Top 100"
+  # Líneas sin flecha
+  geom_segment(
+    data = filter(lineas, !flecha),
+    aes(x = x, xend = xend, y = y, yend = yend),
+    linewidth = 0.6, color = "black"
   ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.title = element_text(face = "bold", size = 13),
-    axis.text.y = element_text(face = "bold", color = "black", size = 10)
-  )
+  # Líneas con flecha
+  geom_segment(
+    data = filter(lineas, flecha),
+    aes(x = x, xend = xend, y = y, yend = yend),
+    arrow = arrow(length = unit(0.20, "cm"), type = "closed"),
+    linewidth = 0.6, color = "black"
+  ) +
+  coord_cartesian(xlim = c(1, 9), ylim = c(0.5, 10.2)) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "white", color = NA))
 
-# Visualizar y guardar en alta resolución (300 dpi)
-print(grafico_metodos)
+# 7. Mostrar en pantalla y guardar en alta resolución (300 dpi)
+print(figura_flujo)
 
 ggsave(
-  filename = "WoS_Methods_Top100.png", 
-  plot = grafico_metodos, 
-  width = 10.5, 
-  height = 5.5, 
+  filename = "Figure_4_WoS_Method_Flowchart.png",
+  plot = figura_flujo,
+  width = 8,
+  height = 6.5,
   dpi = 300,
   bg = "white"
 )
+
 
 # Note: Ignore the checkpoints and run the code as per usual. The image is going to save by itself, do not export it from the Plot section of your work environment. You will need the 2 Excel spreadsheets I will put on the Drive.
