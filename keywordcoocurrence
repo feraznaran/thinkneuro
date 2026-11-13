@@ -1,0 +1,103 @@
+install.packages("bibliometrix")
+library(bibliometrix)
+
+# 1. Instalar librerías si no las tienes (quita el '#' para instalar)
+install.packages(c("readxl", "writexl", "dplyr", "stringr", "tidyr", "ggplot2"))
+
+# 1. Cargar librerías
+library(readxl)
+library(dplyr)
+library(stringr)
+library(bibliometrix)
+
+# 2. Cargar tus archivos Excel (.xlsx)
+wos_excel <- read_excel("savedrecs.xlsx")
+mi_excel  <- read_excel("Data Extraction (ThinkNeuro) (1).xlsx")
+
+# 3. Asegurar estrictamente los primeros 100 papers de tu Excel (ordenados por citas)
+top100_excel <- mi_excel %>%
+  mutate(`WoS Core` = as.numeric(`WoS Core`)) %>%
+  arrange(desc(`WoS Core`)) %>%
+  slice_head(n = 100)
+
+titulos_top100 <- str_remove_all(toupper(trimws(top100_excel$`Article title`)), "[[:punct:]]")
+
+# Identificar columnas clave en savedrecs.xlsx
+col_titulo  <- intersect(names(wos_excel), c("Article Title", "TI"))
+col_de      <- intersect(names(wos_excel), c("Author Keywords", "DE"))
+col_id      <- intersect(names(wos_excel), c("Keywords Plus", "ID"))
+col_anio    <- intersect(names(wos_excel), c("Publication Year", "PY"))
+col_autores <- intersect(names(wos_excel), c("Authors", "AU"))
+
+# 4. Filtrar savedrecs.xlsx para quedarnos SOLO con esos 100 artículos y crear la columna 'SR'
+M_keywords <- wos_excel %>%
+  mutate(TI_clean = str_remove_all(toupper(trimws(.data[[col_titulo]])), "[[:punct:]]")) %>%
+  filter(TI_clean %in% titulos_top100) %>%
+  distinct(TI_clean, .keep_all = TRUE) %>%
+  slice_head(n = 100) %>%
+  transmute(
+    AU = as.character(.data[[col_autores]]),
+    TI = as.character(.data[[col_titulo]]),
+    PY = as.numeric(.data[[col_anio]]),
+    # Combinar Author Keywords y Keywords Plus para evitar filas sin palabras clave
+    DE = toupper(paste(
+      ifelse(is.na(.data[[col_de]]), "", as.character(.data[[col_de]])),
+      ifelse(is.na(.data[[col_id]]), "", as.character(.data[[col_id]])),
+      sep = "; "
+    )),
+    ID = toupper(as.character(.data[[col_id]])),
+    DB = "ISI",
+    # COLUMNA OBLIGATORIA 'SR' que pedía el error de bibliometrix
+    SR = paste0("DOC_", row_number(), ", ", PY)
+  ) %>%
+  # Limpiar puntos y coma dobles o sueltos generados al combinar
+  mutate(DE = str_replace_all(DE, "^;\\s*|;\\s*$", ""),
+         DE = str_replace_all(DE, ";\\s*;", ";")) %>%
+  as.data.frame()
+
+# Verificar en consola que sean máximo 100 filas
+print(paste("Total de artículos incluidos en la red:", nrow(M_keywords)))
+
+# 5. Construir la matriz de coocurrencia de palabras clave
+NetMatrix <- biblioNetwork(
+  M_keywords, 
+  analysis = "co-occurrences", 
+  network = "keywords", 
+  sep = ";"
+)
+
+# 6. Graficar la red de coocurrencia en RStudio
+red_keywords <- networkPlot(
+  NetMatrix, 
+  normalize = "association", 
+  weighted = TRUE, 
+  n = 30,                     # Las 30 palabras clave principales del Top 100
+  Title = "Keyword Co-occurrence Network (Top 100 Most Cited Papers)", 
+  type = "fruchterman", 
+  size = TRUE, 
+  edgesize = 5, 
+  labelsize = 0.8,
+  cluster = "louvain", 
+  remove.multiple = FALSE,
+  remove.isolates = TRUE
+)
+
+# 7. Exportar la figura en alta resolución (300 dpi)
+png("Keyword_Cooccurrence_Top100.png", width = 3000, height = 2400, res = 300)
+networkPlot(
+  NetMatrix, 
+  normalize = "association", 
+  weighted = TRUE, 
+  n = 30, 
+  Title = "Keyword Co-occurrence Network (Top 100 Most Cited Papers)", 
+  type = "fruchterman", 
+  size = TRUE, 
+  edgesize = 5, 
+  labelsize = 0.8,
+  cluster = "louvain", 
+  remove.multiple = FALSE,
+  remove.isolates = TRUE
+)
+dev.off()
+
+# Note: Ignore the checkpoints and run the code as per usual. The image is going to save by itself, do not export it from the Plot section of your work environment. You will need the 2 Excel spreadsheets I will put on the Drive.
